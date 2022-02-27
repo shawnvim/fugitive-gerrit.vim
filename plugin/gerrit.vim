@@ -85,12 +85,13 @@ function! gerrit#comments(...) abort
   let refs = []
 
   for change_id in [change_ids[0]]
-    let detail = gerrit#request('https://' . fqdn . '/a/changes/' . s:url_encode(project) . '~' . 'master' . '~' . change_id . '/?o=ALL_REVISIONS')
+    let detail = gerrit#request('https://' . fqdn . '/a/changes/?q=change:'.change_id.'&o=ALL_REVISIONS')[0]
+    let change_full_id = detail.id
     for commit in keys(detail.revisions)
       let refs += [detail.revisions[commit].ref]
     endfor
 
-    let comments = gerrit#request('https://' . fqdn . '/a/changes/' . s:url_encode(project) . '~' . 'master' . '~' . change_id . '/comments')
+    let comments = gerrit#request('https://' . fqdn . '/a/changes/' . change_full_id . '/comments')
     let qitems = []
     let id_to_comment = {}
 
