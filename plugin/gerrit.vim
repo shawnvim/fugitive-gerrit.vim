@@ -1,24 +1,31 @@
+" Location:     plugin/gerrit.vim
+" Maintainer:   Mark Korondi <korondi.mark@gmail.com>
+
+" see: fugitinve_browse_handlers
 function! gerrit#fugitive_url(opts, ...) abort
   if a:0 || type(a:opts) != type({})
     return ''
   endif
-  let domains = exists('g:fugitive_gerrit_domains') ? g:fugitive_gerrit_domains : []
-  let domain_pattern = 'gerrit.com'
-  for domain in domains
-    let domain_pattern .= '\|' . escape(split(domain, '://')[-1], '.')
-  endfor
+
+  let domains = get(g:, 'fugitive_gerrit_domains', [])
+  let domains = map(domains, { _, domain ->  escape(split(domain, '://')[-1], '.') })
+
+  let domain_pattern = join(domains, '\|')
+
   if a:opts.commit =~# '^\d\=$'
     let commit = a:opts.repo.rev_parse('HEAD')
   else
     let commit = a:opts.commit
   endif
-  let [domain,repo] = matchlist(a:opts.remote,'^.*\(' . domain_pattern . '\)[^/]*/\zs\(.*\)$')[1:2]
-  let url = "https://" . domain . "/plugins/gitiles/"
-  let url .= repo . "/+/" . commit . "/"
-  let url .= a:opts.path 
+
+  let [domain, repo] = matchlist(a:opts.remote,'^.*\(' . domain_pattern . '\)[^/]*/\zs\(.*\)$')[1:2]
+
+  let url  = "https://" . domain . "/plugins/gitiles/" . repo . "/+/" . commit . "/" . a:opts.path 
+
   if a:opts.line1 > 0
     let url .= "#" . a:opts.line1
   endif
+
   return url
 endfunction
 
@@ -33,6 +40,7 @@ function! gerrit#request(path, ...) abort
   let path = a:path
   let options = a:0 ? a:1 : {}
   let args = s:curl_arguments(path, options)
+
   " if exists('*FugitiveExecute') && v:version >= 800
   "   try
   "     if has_key(options, 'callback')
@@ -70,6 +78,7 @@ endfunction
 function! gerrit#comments(...) abort
   let latest_only = index(a:000, 'latest-only') != -1
   let include_resolved = index(a:000, 'include-resolved') != -1
+  let include_checks = index(a:000, 'include-checks') != -1
 
   let change_ids = [gerrit#change_id()]
   let fqdn = FugitiveRemote().hostname
@@ -92,6 +101,14 @@ function! gerrit#comments(...) abort
     endfor
 
     let comments = gerrit#request('https://' . fqdn . '/a/changes/' . change_full_id . '/comments')
+    let robot_comments = gerrit#request('https://' . fqdn . '/a/changes/' . change_full_id . '/robotcomments')
+    for filename in keys(robot_comments)
+      if ! has_key(comments, filename)
+        let comments[filename] = robot_comments[filename]
+      endif
+      call extend(comments[filename], robot_comments[filename])
+    endfor
+
     let qitems = []
     let id_to_comment = {}
 
@@ -113,14 +130,22 @@ function! gerrit#comments(...) abort
         if index(root_comments, _c) == -1
           let root_comments += [_c]
         endif
-        let _c['count'] = cnt
-        let _c['error_type'] = comment['unresolved'] ? 'e' : 'n'
+        if ! has_key(comment, 'unresolved')
+          let comment['unresolved'] = 1
+        endif
+        if ! has_key(_c, 'count') || cnt >= _c['count']
+          let _c['count'] = cnt
+          let _c['error_type'] = comment['unresolved'] ? 'e' : 'n'
+        endif
       endfor
       for comment in root_comments
         if ! include_resolved && comment['error_type'] == 'n'
           continue
         endif
         if latest_only && comment.commit_id != detail.current_revision
+          continue
+        endif
+        if ! include_checks && has_key(comment, 'robot_id')
           continue
         endif
         if has_key(comment, 'range')
@@ -143,15 +168,17 @@ function! gerrit#comments(...) abort
         endif
       endfor
     endfor
-    caddexpr sort(qitems, {i1, i2 -> matchstr(i1, 'Patchset \zs[0-9]\+\ze') > matchstr(i2, 'Patchset \zs[0-9]\+\ze') })
   endfor
 
+  caddexpr sort(qitems, {i1, i2 -> matchstr(i1, 'Patchset \zs[0-9]\+\ze') > matchstr(i2, 'Patchset \zs[0-9]\+\ze') })
   copen
 
   call system('git fetch ' . FugitiveRemoteUrl() . ' ' . join(refs, ' '))
+  return 
 endfunction
+
 function! gerrit#comments_args(A, L, P)
-  return ['include-resolved', 'latest-only']
+  return ['include-resolved', 'include-checks', 'latest-only']
 endfunction
 command! -complete=customlist,gerrit#comments_args -nargs=* GerritComments :call gerrit#comments(<f-args>)
 
@@ -209,6 +236,8 @@ augroup quickfix
   au FileType qf syn match qfPatchset /Patchset [0-9]\+/ contained
 augroup END
 
+" gerrit#Browse() opens the browser pointing to gerrit at the latest ChangeId 
+" note: netrw required
 function! gerrit#browse()
   call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/#/q/' . gerrit#change_id(), 1)
 endfunction
