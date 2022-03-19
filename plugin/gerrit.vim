@@ -5,8 +5,8 @@ if !exists('g:fugitive_browse_handlers')
   let g:fugitive_browse_handlers = []
 endif
 
-if index(g:fugitive_browse_handlers, function('gerrit#fugitive_url')) < 0
-  call insert(g:fugitive_browse_handlers, function('gerrit#fugitive_url'))
+if index(g:fugitive_browse_handlers, function('gerrit#fugitive#url')) < 0
+  call insert(g:fugitive_browse_handlers, function('gerrit#fugitive#url'))
 endif
 
 command! GBrowseGerrit :call gerrit#browse()

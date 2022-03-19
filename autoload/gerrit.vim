@@ -1,38 +1,6 @@
 " Location:     autoload/gerrit.vim
 " Maintainer:   Mark Korondi <korondi.mark@gmail.com>
 
-" see: fugitive_browse_handlers
-function! gerrit#fugitive_url(opts, ...) abort
-  if a:0 || type(a:opts) != type({})
-    return ''
-  endif
-
-  let domains = get(g:, 'fugitive_gerrit_domains', [])
-  let domains = map(domains, { _, domain ->  escape(split(domain, '://')[-1], '.') })
-
-  let domain_pattern = join(domains, '\|')
-
-  if a:opts.commit =~# '^\d\=$'
-    let commit = a:opts.repo.rev_parse('HEAD')
-  else
-    let commit = a:opts.commit
-  endif
-
-  let [domain, repo] = matchlist(a:opts.remote,'^.*\(' . domain_pattern . '\)[^/]*/\zs\(.*\)$')[1:2]
-
-  let url  = 'https://' . domain . '/plugins/gitiles/' . repo . '/+/' . commit . '/' . a:opts.path 
-
-  if a:opts.line1 > 0
-    let url .= '#' . a:opts.line1
-  endif
-
-  return url
-endfunction
-
-function! s:url_encode(str) abort
-  return substitute(a:str, '[?@=&<>%#/:+[:space:]]', '\=submatch(0)==" "?"+":printf("%%%02X", char2nr(submatch(0)))', 'g')
-endfunction
-
 function! s:throw(string) abort
   throw 'gerrit: '.a:string
 endfunction
@@ -58,7 +26,7 @@ function! gerrit#request(path, ...) abort
   let raw = system(join(map(copy(args), 's:shellesc(v:val)'), ' '))
   if has_key(options, 'callback')
     if !v:shell_error && !empty(raw)
-      call options.callback(gerrit#JsonDecode(raw))
+      call options.callback(json_decode(split(raw, '\n')[1]))
     endif
     return {}
   endif
@@ -69,8 +37,12 @@ function! gerrit#request(path, ...) abort
   endif
 endfunction
 
+" Purpose:
+"   Find current gerrit ChangeId.
+" Returns:
+"   result: current ChangeId or v:null if not found
 function! gerrit#change_id() abort
-  for line in split(system('git log remotes/origin/HEAD..HEAD --format=%b'), '\n')
+  for line in split(system('git log -1 --format=%b'), '\n')
     let change_id = matchstr(line, '^Change-Id:\s\+\zs\([^ ]\+\)')
     if len(change_id) > 0
       return change_id
@@ -84,20 +56,20 @@ function! gerrit#comments(...) abort
   let include_resolved = index(a:000, 'include-resolved') != -1
   let include_checks = index(a:000, 'include-checks') != -1
 
-  let change_ids = [gerrit#change_id()]
+  let change_id = gerrit#change_id()
   let fqdn = FugitiveRemote().hostname
   let s:project = FugitiveRemote().path[1:]
   let branch = FugitiveHead(7)
-  cexpr []
 
-  if len(change_ids) == 0
-    echom 'No reviews found'
+  if change_id is v:null
+    echo 'No reviews found'
     return
   endif
 
   let refs = []
 
-  for change_id in [change_ids[0]]
+  " Currently handle only one (current) ChangeId
+  for change_id in [change_id]
     let detail = gerrit#request('https://' . fqdn . '/a/changes/?q=change:'.change_id.'&o=ALL_REVISIONS')[0]
     let change_full_id = detail.id
     for commit in keys(detail.revisions)
@@ -113,7 +85,7 @@ function! gerrit#comments(...) abort
       call extend(comments[filename], robot_comments[filename])
     endfor
 
-    let qitems = []
+    let s:qitems = []
     let id_to_comment = {}
 
     for filename in keys(comments)
@@ -152,51 +124,48 @@ function! gerrit#comments(...) abort
         if ! include_checks && has_key(comment, 'robot_id')
           continue
         endif
-        if has_key(comment, 'range')
-          let qitems += [{'str': 'GERRIT:'
-                \ . '|' . 'fugitive://'. FugitiveGitDir() . '//' . comment.commit_id . '/' . filename
-                \ . '|' . 'Patchset ' . comment.patch_set . ':' . substitute(filename, '[^/]\(.\)[^/]\+/', '\1/', 'g')
-                \ . '|' . comment['range']['start_line'] . '-' . comment['range']['end_line']
-                \ . '|' . comment['range']['start_character'] . '-' . comment['range']['end_character']
-                \ . '|' . comment['error_type']
-                \ . '|' . '@' . comment['author']['username'] . ' ' . comment['message'] . ' (' . comment['count'] . ' more)' 
-                \ , 'comment_id': comment['id'], 'submission_id': detail['submission_id']}]
-        else
-          let qitems += [{'str': 'GERRIT:'
-                \ . '|' . 'fugitive://'. FugitiveGitDir() . '//' . comment.commit_id . '/' . filename
-                \ . '|' . 'Patchset ' . comment.patch_set . ':' . substitute(filename, '[^/]\(.\)[^/]\+/', '\1/', 'g')
-                \ . '|' . comment['line']
-                \ . '|' . comment['error_type']
-                \ . '|' . '@' . comment['author']['username'] . ' ' . comment['message'] . ' (' . comment['count'] . ' more)' 
-                \ , 'comment_id': comment['id'], 'submission_id': detail['submission_id']}]
-        endif
+        let s:qitems += [{'str': gerrit#comment2cexpr(filename, comment), 'comment': comment, 'detail': detail}]
       endfor
     endfor
   endfor
 
-  caddexpr map(copy(sort(qitems, {i1, i2 -> matchstr(i1.str, 'Patchset \zs[0-9]\+\ze') > matchstr(i2.str, 'Patchset \zs[0-9]\+\ze') })), {_,v -> v.str})
+  cexpr []
+  caddexpr map(copy(sort(s:qitems, {i1, i2 -> i1['comment']['patch_set'] > i2['comment']['patch_set']})), {_,v -> v.str})
   copen
 
-  let s:qitems = qitems
-  call s:add_qf_mappings()
+  let &l:wrap = g:gerrit_wrap_comments
 
+  nnoremap <buffer> gx :call <SID>gerrit_browse_qitem(line('.'))<CR>
+
+  " Ensure that the refs seen here are going to be available locally
+  " TODO: make it async
   call system('git fetch ' . FugitiveRemoteUrl() . ' ' . join(refs, ' '))
+
   return 
+endfunction
+
+function gerrit#comment2cexpr(filename, comment)
+  let cexpr = 'GERRIT:'
+        \ . '|' . 'fugitive://'. FugitiveGitDir() . '//' . a:comment['commit_id'] . '/' . a:filename
+        \ . '|' . 'Patchset ' . a:comment['patch_set'] . ':' . substitute(a:filename, '\(.\)[^/]\+/', '\1/', 'g')
+  if has_key(a:comment, 'range')
+    let cexpr = cexpr
+        \ . '|' . a:comment['range']['start_line'] . '-' . a:comment['range']['end_line']
+        \ . '|' . a:comment['range']['start_character'] . '-' . a:comment['range']['end_character']
+  else
+    let cexpr = cexpr
+        \ . '|' . a:comment['line']
+  endif
+    let cexpr = cexpr
+        \ . '|' . a:comment['error_type']
+        \ . '|' . '@' . a:comment['author']['username'] . ' ' . a:comment['message'] . ' (' . a:comment['count'] . ' more)' 
+  return cexpr
 endfunction
 
 function! <SID>gerrit_browse_qitem(linenr)
   let item = s:qitems[a:linenr - 1]
-  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/c/' . s:project . '/+/' . item['submission_id'] . '/comment/' . item['comment_id'], 1)
+  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/c/' . s:project . '/+/' . item['detail']['_number'] . '/comment/' . item['comment']['id'], 1)
 endfunction
-
-function! s:add_qf_mappings()
-  nnoremap <buffer> gx :call <SID>gerrit_browse_qitem(line('.'))<CR>
-endfunction
-
-augroup quickfix_mappings
-  autocmd!
-  au QuickFixCmdPost call s:remove_qf_mappings()
-augroup END
 
 function! gerrit#comments_args(A, L, P)
   return ['include-resolved', 'include-checks', 'latest-only']
@@ -238,8 +207,11 @@ function! s:curl_arguments(path, ...) abort
   return args
 endfunction
 
-let &errorformat = 'GERRIT:|%f|%o|%l|%t|%m,' . &errorformat
-let &errorformat = 'GERRIT:|%f|%o|%l-%e|%c-%k|%t|%m,' . &errorformat
+" gerrit#Browse() opens the browser pointing to gerrit at the latest ChangeId 
+" note: netrw required
+function! gerrit#browse()
+  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/#/q/' . gerrit#change_id(), 1)
+endfunction
 
 augroup quickfix
   autocmd!
@@ -248,11 +220,10 @@ augroup quickfix
   au FileType qf syn match qfPatchset /Patchset [0-9]\+/ contained
 augroup END
 
-" gerrit#Browse() opens the browser pointing to gerrit at the latest ChangeId 
-" note: netrw required
-function! gerrit#browse()
-  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/#/q/' . gerrit#change_id(), 1)
-endfunction
+let &errorformat = 'GERRIT:|%f|%o|%l|%t|%m,' . &errorformat
+let &errorformat = 'GERRIT:|%f|%o|%l-%e|%c-%k|%t|%m,' . &errorformat
 
 hi link qfUsername Constant
 hi link qfPatchset Statement
+
+let g:gerrit_wrap_comments = get(g:, 'gerrit_wrap_comments', 1)
