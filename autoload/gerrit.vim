@@ -160,7 +160,7 @@ function! gerrit#comments(...) abort
                 \ . '|' . comment['range']['start_character'] . '-' . comment['range']['end_character']
                 \ . '|' . comment['error_type']
                 \ . '|' . '@' . comment['author']['username'] . ' ' . comment['message'] . ' (' . comment['count'] . ' more)' 
-                \ , 'filename': filename, 'patchset': comment.patch_set, 'line': comment['range']['start_line'], 'submission_id': detail['submission_id']}]
+                \ , 'comment_id': comment['id'], 'submission_id': detail['submission_id']}]
         else
           let qitems += [{'str': 'GERRIT:'
                 \ . '|' . 'fugitive://'. FugitiveGitDir() . '//' . comment.commit_id . '/' . filename
@@ -168,7 +168,7 @@ function! gerrit#comments(...) abort
                 \ . '|' . comment['line']
                 \ . '|' . comment['error_type']
                 \ . '|' . '@' . comment['author']['username'] . ' ' . comment['message'] . ' (' . comment['count'] . ' more)' 
-                \ , 'filename': filename, 'patchset': comment.patch_set, 'line': comment['line'], 'submission_id': detail['submission_id']}]
+                \ , 'comment_id': comment['id'], 'submission_id': detail['submission_id']}]
         endif
       endfor
     endfor
@@ -186,7 +186,7 @@ endfunction
 
 function! <SID>gerrit_browse_qitem(linenr)
   let item = s:qitems[a:linenr - 1]
-  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/c/' . s:project . '/+/' . item['submission_id'] . '/' . item['patchset'] . '/' . item['filename'] . '#' . item['line'], 1)
+  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/c/' . s:project . '/+/' . item['submission_id'] . '/comment/' . item['comment_id'], 1)
 endfunction
 
 function! s:add_qf_mappings()
