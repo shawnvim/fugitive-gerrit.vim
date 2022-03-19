@@ -155,7 +155,7 @@ function! gerrit#comments(...) abort
         if has_key(comment, 'range')
           let qitems += [{'str': 'GERRIT:'
                 \ . '|' . 'fugitive://'. FugitiveGitDir() . '//' . comment.commit_id . '/' . filename
-                \ . '|' . 'Patchset ' . comment.patch_set . ':' . filename
+                \ . '|' . 'Patchset ' . comment.patch_set . ':' . substitute(filename, '[^/]\(.\)[^/]\+/', '\1/', 'g')
                 \ . '|' . comment['range']['start_line'] . '-' . comment['range']['end_line']
                 \ . '|' . comment['range']['start_character'] . '-' . comment['range']['end_character']
                 \ . '|' . comment['error_type']
@@ -164,7 +164,7 @@ function! gerrit#comments(...) abort
         else
           let qitems += [{'str': 'GERRIT:'
                 \ . '|' . 'fugitive://'. FugitiveGitDir() . '//' . comment.commit_id . '/' . filename
-                \ . '|' . 'Patchset ' . comment.patch_set . ':' . filename
+                \ . '|' . 'Patchset ' . comment.patch_set . ':' . substitute(filename, '[^/]\(.\)[^/]\+/', '\1/', 'g')
                 \ . '|' . comment['line']
                 \ . '|' . comment['error_type']
                 \ . '|' . '@' . comment['author']['username'] . ' ' . comment['message'] . ' (' . comment['count'] . ' more)' 
