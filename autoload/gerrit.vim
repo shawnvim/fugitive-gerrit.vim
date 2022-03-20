@@ -184,7 +184,8 @@ function! <SID>gerrit_browse_qitem(linenr)
 endfunction
 
 function! gerrit#comments_args(A, L, P)
-  return ['include-resolved', 'include-checks', 'latest-only']
+  let choices = ['include-resolved', 'include-checks', 'latest-only']
+  return filter(choices, {k,v->stridx(v,a:A) == 0})
 endfunction
 
 function! s:shellesc(arg) abort
