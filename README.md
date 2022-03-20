@@ -1,8 +1,16 @@
 # fugitive-gerrit.vim
 
-An extension to fugitive.vim for [gerrit](https://www.gerritcodereview.com/) support
+A plugin to fugitive.vim for [gerrit](https://www.gerritcodereview.com/) support
 
 ## Features
+
+* **`:GerritChanges`** populates the QuickFix window with change request in the current repository
+
+    * Filtering works e.g `:GerritChanges owner:myusername`
+
+    * **`gx`** on a change request in the QuickFix window opens it in on gerrit web
+
+    * **`<Enter>`** on a change request in the QuickFix window checks it out locally
 
 * **`:GerritComments`** populates the QuickFix window with (unresolved) comments for the current ChangeId
 
@@ -14,9 +22,10 @@ An extension to fugitive.vim for [gerrit](https://www.gerritcodereview.com/) sup
 
     * `:GerritComments include-checks` includes comments from automated systems (linters etc)
 
+    * **`gx`** on a comment in the QuickFix window opens the comment on gerrit web
+
 [`:Gedit`]: https://github.com/tpope/vim-fugitive/blob/46652a304f0b89f36d70cee954d77e467ec0f6de/doc/fugitive.txt#L138
 
-* **`gx`** on a comment in the QuickFix window opens the comment on gerrit web
 
 * **[`:GBrowse`][]** to browse a file / selected line on gerrit web.
 
@@ -27,6 +36,40 @@ An extension to fugitive.vim for [gerrit](https://www.gerritcodereview.com/) sup
     ```
 
 [`:GBrowse`]: https://github.com/tpope/vim-fugitive/blob/46652a304f0b89f36d70cee954d77e467ec0f6de/doc/fugitive.txt#L234
+
+## Installation
+
+0. Prerequisites
+
+    In order to use this plugin, you will need `curl`, `git`, and [`vim-fugitive`][] installed.
+
+1. Use your favorite vim plugin manager to install fugitive-gerrit.vim
+
+    As an example with [Vim-Plug](https://github.com/junegunn/vim-plug), add the GitHub path for this repository to your `~/.vimrc`:
+
+    ```vim
+    Plug 'tpope/vim-fugitive'
+    Plug 'kmARC/fugitive-gerrit.vim'
+    ```
+
+    Then run the command `:PlugInstall` in Vim. See the Vim-Plug documentation for more information.
+
+2. Set up [`.netrc`][] for gerrit authentication
+
+    1. Head over to your gerrit HTTP credential settings `https://gerrit.mycompany.com/settings/#HTTPCredentials`
+
+    2. Take note of your username 
+
+    3. Generate a new password
+
+    4. Amend your `$HOME/.netrc` with your `<username>` and newly generated `<password>`:
+
+        ```netrc
+        machine gerrit.mycompany.com login <username> password <password>
+        ```
+
+[`.netrc`]: https://curl.se/docs/manual.html#netrc
+[`vim-fugitive`]: https://github.com/tpope/vim-fugitive
 
 ## Configuration
 

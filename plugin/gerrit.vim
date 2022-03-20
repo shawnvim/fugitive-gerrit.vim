@@ -12,6 +12,7 @@ endif
 command! GBrowseGerrit :call gerrit#browse()
 
 command! -complete=customlist,gerrit#comments_args -nargs=* GerritComments :call gerrit#comments(<f-args>)
+command! -complete=customlist,gerrit#changes_args  -nargs=* GerritChanges  :call gerrit#changes(<f-args>)
 
 let &cpoptions = s:cpo_save
 unlet s:cpo_save

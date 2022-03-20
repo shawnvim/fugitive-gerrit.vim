@@ -1,39 +1,10 @@
 " Location:     autoload/gerrit.vim
 " Maintainer:   Mark Korondi <korondi.mark@gmail.com>
 
-function! s:throw(string) abort
-  throw 'gerrit: '.a:string
-endfunction
-
-function! s:request(path, ...) abort
-  if !executable('curl')
-    call s:throw('cURL is required')
-  endif
-  let path = a:path
-  let options = a:0 ? a:1 : {}
-  let args = s:curl_arguments(path, options)
-
-  if exists('*FugitiveExecute') && v:version >= 800
-    try
-      if has_key(options, 'callback')
-        return FugitiveExecute({'argv': args}, { r -> r.exit_status || r.stdout ==# [''] ? '' : options.callback(empty(r.stdout) ? r.stdout : json_decode(r.stdout[1])) })
-      endif
-      let raw = FugitiveExecute({'argv': args}).stdout
-      return empty(raw) ? raw : json_decode(raw[1])
-    catch /^fugitive:/
-    endtry
-  endif
-
-  let raw = system(join(map(copy(args), 's:shellesc(v:val)'), ' '))
-
-  if has_key(options, 'callback')
-    if !v:shell_error && !empty(raw)
-      call options.callback(json_decode(split(raw, '\n')[1]))
-    endif
-    return {}
-  endif
-
-  return empty(raw) ? raw : json_decode(split(raw, '\n')[1])
+" gerrit#Browse() opens the browser pointing to gerrit at the latest ChangeId 
+" note: netrw required
+function! gerrit#browse()
+  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/#/q/' . gerrit#change_id(), 1)
 endfunction
 
 " Purpose:
@@ -48,6 +19,11 @@ function! gerrit#change_id() abort
     endif
   endfor
   return v:null
+endfunction
+
+function! gerrit#comments_args(A, L, P)
+  let choices = ['include-resolved', 'include-checks', 'latest-only']
+  return filter(choices, {k,v->stridx(v,a:A) == 0})
 endfunction
 
 function! gerrit#comments(...) abort
@@ -67,7 +43,7 @@ function! gerrit#comments(...) abort
   let s:comments = {}
 
   function! s:populate_quickfix()
-    let s:qitems = []
+    let s:comment_qitems = []
     let id_to_comment = {}
 
     for filename in keys(s:comments)
@@ -106,17 +82,17 @@ function! gerrit#comments(...) abort
         if ! s:include_checks && has_key(comment, 'robot_id')
           continue
         endif
-        let s:qitems += [{'str': s:comment2cexpr(filename, comment), 'comment': comment, 'detail': s:detail}]
+        let s:comment_qitems += [{'str': s:comment2cexpr(filename, comment), 'comment': comment, 'detail': s:detail}]
       endfor
     endfor
 
     cexpr []
-    caddexpr map(copy(sort(s:qitems, {i1, i2 -> i1['comment']['patch_set'] > i2['comment']['patch_set']})), {_,v -> v.str})
+    caddexpr map(copy(sort(s:comment_qitems, {i1, i2 -> i1['comment']['patch_set'] > i2['comment']['patch_set']})), {_,v -> v.str})
     copen
 
     let &l:wrap = g:gerrit_wrap_comments
 
-    nnoremap <buffer> gx :call <SID>gerrit_browse_qitem(line('.'))<CR>
+    nnoremap <buffer> gx :call <SID>gerrit_browse_comment_qitem(line('.'))<CR>
   endfunction
 
   function! s:comments_cb(new_comments)
@@ -160,7 +136,7 @@ function! gerrit#comments(...) abort
 endfunction
 
 function s:comment2cexpr(filename, comment)
-  let cexpr = 'GERRIT:'
+  let cexpr = 'GERRITCOMMENT:'
         \ . '|' . 'fugitive://'. FugitiveGitDir() . '//' . a:comment['commit_id'] . '/' . a:filename
         \ . '|' . 'Patchset ' . a:comment['patch_set'] . ':' . substitute(a:filename, '\(.\)[^/]\+/', '\1/', 'g')
   if has_key(a:comment, 'range')
@@ -177,15 +153,60 @@ function s:comment2cexpr(filename, comment)
   return cexpr
 endfunction
 
-function! <SID>gerrit_browse_qitem(linenr)
-  let item = s:qitems[a:linenr - 1]
+function! <SID>gerrit_browse_comment_qitem(linenr)
+  let item = s:comment_qitems[a:linenr - 1]
   let project = FugitiveRemote().path[1:]
   call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/c/' . project . '/+/' . item['detail']['_number'] . '/comment/' . item['comment']['id'], 1)
 endfunction
 
-function! gerrit#comments_args(A, L, P)
-  let choices = ['include-resolved', 'include-checks', 'latest-only']
+function! gerrit#changes_args(A, L, P)
+  let choices = ['include-merged']
   return filter(choices, {k,v->stridx(v,a:A) == 0})
+endfunction
+
+function! gerrit#changes(...)
+  let s:fqdn = FugitiveRemote().hostname
+  let s:change_qitems = []
+
+  function! s:changes_cb(changes)
+    for change in a:changes
+      let s:change_qitems += [{'str': s:change2cexpr(change), 'change': change}]
+    endfor
+
+    cexpr []
+    caddexpr map(copy(s:change_qitems), {_,v -> v.str})
+    copen
+
+    setlocal nowrap
+
+    nnoremap <buffer> gx   :call <SID>gerrit_browse_change_qitem(line('.'))<CR>
+    nnoremap <buffer> <CR> :call <SID>gerrit_fetch_change(line('.'))<CR>
+  endfunction
+
+  let project = FugitiveRemote().path[1:]
+  call s:request('https://' . s:fqdn . '/a/changes/?q=' . (a:0>0?a:1.'+':'') . 'project:' . project . '&o=DETAILED_ACCOUNTS&o=CURRENT_REVISION', {'callback': function('s:changes_cb')})
+endfunction
+
+function s:change2cexpr(change) abort
+  let status = has_key(a:change, 'mergeable') && ! a:change['mergeable'] ? 'MCONFL' : a:change['status']
+  let status = status ==? 'ABANDONED' ? 'ABANDN' : status
+  let cexpr = 'GERRITCHANGE:'
+        \ . '|' . strftime('%b %d %H:%M', strptime('%Y-%m-%d %H:%M:%S', a:change['updated'])) . ' ' . printf('%6s', status)
+        \ . '|' . '@' . a:change['owner']['username'] . ' ' . a:change['subject']
+  return cexpr
+endfunction
+
+function! <SID>gerrit_browse_change_qitem(linenr)
+  let item = s:change_qitems[a:linenr - 1]
+  let project = FugitiveRemote().path[1:]
+  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/c/' . project . '/+/' . item['change']['_number'], 1)
+endfunction
+
+function! <SID>gerrit_fetch_change(linenr)
+  bdelete
+  let item = s:change_qitems[a:linenr - 1]
+  let ref = values(values(item['change']['revisions'])[0]['fetch'])[0]['ref']
+  execute('Git fetch origin ' . ref . ' | Git checkout FETCH_HEAD | GerritComments include-resolved')
 endfunction
 
 function! s:shellesc(arg) abort
@@ -224,23 +245,60 @@ function! s:curl_arguments(path, ...) abort
   return args
 endfunction
 
-" gerrit#Browse() opens the browser pointing to gerrit at the latest ChangeId 
-" note: netrw required
-function! gerrit#browse()
-  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/#/q/' . gerrit#change_id(), 1)
+function! s:throw(string) abort
+  throw 'gerrit: '.a:string
 endfunction
+
+function! s:request(path, ...) abort
+  if !executable('curl')
+    call s:throw('cURL is required')
+  endif
+  let path = a:path
+  let options = a:0 ? a:1 : {}
+  let args = s:curl_arguments(path, options)
+
+  if exists('*FugitiveExecute') && v:version >= 800
+    try
+      if has_key(options, 'callback')
+        return FugitiveExecute({'argv': args}, { r -> r.exit_status || r.stdout ==# [''] ? '' : options.callback(empty(r.stdout) ? r.stdout : json_decode(r.stdout[1])) })
+      endif
+      let raw = FugitiveExecute({'argv': args}).stdout
+      return empty(raw) ? raw : json_decode(raw[1])
+    catch /^fugitive:/
+    endtry
+  endif
+
+  let raw = system(join(map(copy(args), 's:shellesc(v:val)'), ' '))
+
+  if has_key(options, 'callback')
+    if !v:shell_error && !empty(raw)
+      call options.callback(json_decode(split(raw, '\n')[1]))
+    endif
+    return {}
+  endif
+
+  return empty(raw) ? raw : json_decode(split(raw, '\n')[1])
+endfunction
+
 
 augroup quickfix
   autocmd!
   au FileType qf syn match qfUsername /@[^ ]\+/
-  au FileType qf syn match qfFileName /^[^|]*/ nextgroup=qfSeparator contains=qfPatchset
+  au FileType qf syn match qfFileName /^[^|]*/ nextgroup=qfSeparator contains=qfPatchset,qfStatusNew,qfStatusConflict,qfStatusMerged
   au FileType qf syn match qfPatchset /Patchset [0-9]\+/ contained
+  au FileType qf syn match qfStatusNew      /   NEW/ contained
+  au FileType qf syn match qfStatusConflict /MCONFL/ contained
+  au FileType qf syn match qfStatusMerged   /MERGED/ contained
 augroup END
 
-let &errorformat = 'GERRIT:|%f|%o|%l|%t|%m,' . &errorformat
-let &errorformat = 'GERRIT:|%f|%o|%l-%e|%c-%k|%t|%m,' . &errorformat
+let &errorformat = 'GERRITCOMMENT:|%f|%o|%l|%t|%m,' . &errorformat
+let &errorformat = 'GERRITCOMMENT:|%f|%o|%l-%e|%c-%k|%t|%m,' . &errorformat
+let &errorformat = 'GERRITCHANGE:|%f|%m,' . &errorformat
 
 hi link qfUsername Constant
 hi link qfPatchset Statement
+hi link qfStatusNew      Comment
+hi link qfStatusConflict Error
+hi link qfStatusMerged   DiffAdd
 
 let g:gerrit_wrap_comments = get(g:, 'gerrit_wrap_comments', 1)
