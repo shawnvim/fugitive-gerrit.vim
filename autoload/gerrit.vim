@@ -5,7 +5,7 @@ function! s:throw(string) abort
   throw 'gerrit: '.a:string
 endfunction
 
-function! gerrit#request(path, ...) abort
+function! s:request(path, ...) abort
   if !executable('curl')
     call s:throw('cURL is required')
   endif
@@ -13,28 +13,27 @@ function! gerrit#request(path, ...) abort
   let options = a:0 ? a:1 : {}
   let args = s:curl_arguments(path, options)
 
-  " if exists('*FugitiveExecute') && v:version >= 800
-  "   try
-  "     if has_key(options, 'callback')
-  "       return FugitiveExecute({'argv': args}, { r -> r.exit_status || r.stdout ==# [''] ? '' : options.callback(json_decode(join(r.stdout, ' '))) })
-  "     endif
-  "     let raw = join(FugitiveExecute({'argv': args}).stdout, ' ')
-  "     return empty(raw) ? raw : json_decode(raw)
-  "   catch /^fugitive:/
-  "   endtry
-  " endif
+  if exists('*FugitiveExecute') && v:version >= 800
+    try
+      if has_key(options, 'callback')
+        return FugitiveExecute({'argv': args}, { r -> r.exit_status || r.stdout ==# [''] ? '' : options.callback(empty(r.stdout) ? r.stdout : json_decode(r.stdout[1])) })
+      endif
+      let raw = FugitiveExecute({'argv': args}).stdout
+      return empty(raw) ? raw : json_decode(raw[1])
+    catch /^fugitive:/
+    endtry
+  endif
+
   let raw = system(join(map(copy(args), 's:shellesc(v:val)'), ' '))
+
   if has_key(options, 'callback')
     if !v:shell_error && !empty(raw)
       call options.callback(json_decode(split(raw, '\n')[1]))
     endif
     return {}
   endif
-  if raw ==# ''
-    return raw
-  else
-    return json_decode(split(raw, '\n')[1])
-  endif
+
+  return empty(raw) ? raw : json_decode(split(raw, '\n')[1])
 endfunction
 
 " Purpose:
@@ -52,51 +51,34 @@ function! gerrit#change_id() abort
 endfunction
 
 function! gerrit#comments(...) abort
-  let latest_only = index(a:000, 'latest-only') != -1
-  let include_resolved = index(a:000, 'include-resolved') != -1
-  let include_checks = index(a:000, 'include-checks') != -1
+  let s:latest_only = index(a:000, 'latest-only') != -1
+  let s:include_resolved = index(a:000, 'include-resolved') != -1
+  let s:include_checks = index(a:000, 'include-checks') != -1
 
-  let change_id = gerrit#change_id()
-  let fqdn = FugitiveRemote().hostname
-  let s:project = FugitiveRemote().path[1:]
-  let branch = FugitiveHead(7)
+  let s:fqdn = FugitiveRemote().hostname
+  let s:change_id = gerrit#change_id()
+  let s:remaining_comment_callbacks = 1 + s:include_checks
 
-  if change_id is v:null
+  if s:change_id is v:null
     echo 'No reviews found'
     return
   endif
 
-  let refs = []
+  let s:comments = {}
 
-  " Currently handle only one (current) ChangeId
-  for change_id in [change_id]
-    let detail = gerrit#request('https://' . fqdn . '/a/changes/?q=change:'.change_id.'&o=ALL_REVISIONS')[0]
-    let change_full_id = detail.id
-    for commit in keys(detail.revisions)
-      let refs += [detail.revisions[commit].ref]
-    endfor
-
-    let comments = gerrit#request('https://' . fqdn . '/a/changes/' . change_full_id . '/comments')
-    let robot_comments = gerrit#request('https://' . fqdn . '/a/changes/' . change_full_id . '/robotcomments')
-    for filename in keys(robot_comments)
-      if ! has_key(comments, filename)
-        let comments[filename] = robot_comments[filename]
-      endif
-      call extend(comments[filename], robot_comments[filename])
-    endfor
-
+  function! s:populate_quickfix()
     let s:qitems = []
     let id_to_comment = {}
 
-    for filename in keys(comments)
+    for filename in keys(s:comments)
       if index(['/COMMIT_MSG', '/PATCHSET_LEVEL'], filename) != -1
         continue
       endif
       let root_comments = []
-      for comment in comments[filename]
+      for comment in s:comments[filename]
         let id_to_comment[comment['id']] = comment
       endfor
-      for comment in comments[filename]
+      for comment in s:comments[filename]
         let _c = comment
         let cnt = 0
         while get(_c, 'in_reply_to', '') !=# ''
@@ -115,36 +97,69 @@ function! gerrit#comments(...) abort
         endif
       endfor
       for comment in root_comments
-        if ! include_resolved && comment['error_type'] ==# 'n'
+        if ! s:include_resolved && comment['error_type'] ==# 'n'
           continue
         endif
-        if latest_only && comment.commit_id != detail.current_revision
+        if s:latest_only && comment.commit_id != s:detail.current_revision
           continue
         endif
-        if ! include_checks && has_key(comment, 'robot_id')
+        if ! s:include_checks && has_key(comment, 'robot_id')
           continue
         endif
-        let s:qitems += [{'str': gerrit#comment2cexpr(filename, comment), 'comment': comment, 'detail': detail}]
+        let s:qitems += [{'str': s:comment2cexpr(filename, comment), 'comment': comment, 'detail': s:detail}]
       endfor
     endfor
-  endfor
 
-  cexpr []
-  caddexpr map(copy(sort(s:qitems, {i1, i2 -> i1['comment']['patch_set'] > i2['comment']['patch_set']})), {_,v -> v.str})
-  copen
+    cexpr []
+    caddexpr map(copy(sort(s:qitems, {i1, i2 -> i1['comment']['patch_set'] > i2['comment']['patch_set']})), {_,v -> v.str})
+    copen
 
-  let &l:wrap = g:gerrit_wrap_comments
+    let &l:wrap = g:gerrit_wrap_comments
 
-  nnoremap <buffer> gx :call <SID>gerrit_browse_qitem(line('.'))<CR>
+    nnoremap <buffer> gx :call <SID>gerrit_browse_qitem(line('.'))<CR>
+  endfunction
 
-  " Ensure that the refs seen here are going to be available locally
-  " TODO: make it async
-  call system('git fetch ' . FugitiveRemoteUrl() . ' ' . join(refs, ' '))
+  function! s:comments_cb(new_comments)
+    for filename in keys(a:new_comments)
+      if ! has_key(s:comments, filename)
+        let s:comments[filename] = a:new_comments[filename]
+      endif
+      call extend(s:comments[filename], a:new_comments[filename])
+    endfor
 
-  return 
+    let s:remaining_comment_callbacks -= 1
+
+    if s:remaining_comment_callbacks == 0
+      call s:populate_quickfix()
+    endif
+  endfunction
+
+  function! s:detail_cb(details)
+    let s:detail = a:details[0]
+
+    call s:request('https://' . s:fqdn . '/a/changes/' . s:detail.id . '/comments', {'callback': function('s:comments_cb')})
+    if s:include_checks
+      call s:request('https://' . s:fqdn . '/a/changes/' . s:detail.id . '/robotcomments', {'callback': function('s:comments_cb')})
+    endif
+
+    " Ensure that the refs seen here are going to be available locally
+    let git_fetch_cmd = ['git', 'fetch', FugitiveRemoteUrl()] + map(values(s:detail.revisions), {_,v -> v.ref})
+    if exists('*FugitiveExecute') && v:version >= 800
+      try
+        call FugitiveExecute({'argv': git_fetch_cmd}, {->v:null} )
+      catch /^fugitive:/
+      endtry
+    else
+      call system(join(git_fetch_cmd, ' '))
+    endif
+  endfunction
+
+  " Currently handle only one (current) ChangeId
+  call s:request('https://' . s:fqdn . '/a/changes/?q=change:'.s:change_id.'&o=ALL_REVISIONS', {'callback': function('s:detail_cb')})
+
 endfunction
 
-function gerrit#comment2cexpr(filename, comment)
+function s:comment2cexpr(filename, comment)
   let cexpr = 'GERRIT:'
         \ . '|' . 'fugitive://'. FugitiveGitDir() . '//' . a:comment['commit_id'] . '/' . a:filename
         \ . '|' . 'Patchset ' . a:comment['patch_set'] . ':' . substitute(a:filename, '\(.\)[^/]\+/', '\1/', 'g')
@@ -164,7 +179,8 @@ endfunction
 
 function! <SID>gerrit_browse_qitem(linenr)
   let item = s:qitems[a:linenr - 1]
-  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/c/' . s:project . '/+/' . item['detail']['_number'] . '/comment/' . item['comment']['id'], 1)
+  let project = FugitiveRemote().path[1:]
+  call netrw#BrowseX('https://' . FugitiveRemote().hostname . '/c/' . project . '/+/' . item['detail']['_number'] . '/comment/' . item['comment']['id'], 1)
 endfunction
 
 function! gerrit#comments_args(A, L, P)
