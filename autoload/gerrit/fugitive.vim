@@ -8,7 +8,7 @@ function! gerrit#fugitive#url(opts, ...) abort
   endif
 
   let domains = get(g:, 'fugitive_gerrit_domains', [])
-  let domains = map(domains, { _, domain ->  escape(split(domain, '://')[-1], '.') })
+  let domains = map(domains, { _, domain ->  split(domain, '://')[-1] })
 
   let domain_pattern = join(domains, '\|')
 
@@ -18,7 +18,7 @@ function! gerrit#fugitive#url(opts, ...) abort
     let commit = a:opts.commit
   endif
 
-  let [domain, repo] = matchlist(a:opts.remote,'^.*\(' . domain_pattern . '\)[^/]*/\zs\(.*\)$')[1:2]
+  let [domain, repo] = matchlist(a:opts.remote,'^.*\(' . escape(domain_pattern, '.') . '\)[^/]*/\zs\(.*\)$')[1:2]
 
   let url  = 'https://' . domain . '/plugins/gitiles/' . repo . '/+/' . commit . '/' . a:opts.path 
 
