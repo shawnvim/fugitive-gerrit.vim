@@ -18,7 +18,12 @@ function! gerrit#fugitive#url(opts, ...) abort
     let commit = a:opts.commit
   endif
 
-  let [domain, repo] = matchlist(a:opts.remote,'^.*\(' . escape(domain_pattern, '.') . '\)[^/]*/\zs\(.*\)$')[1:2]
+  try
+    let [domain, repo] = matchlist(a:opts.remote,'^.*\(' . escape(domain_pattern, '.') . '\)[^/]*/\zs\(.*\)$')[1:2]
+  catch /.*/
+    " None of the domains could be found
+    return ''
+  endtry
 
   let url  = 'https://' . domain . '/plugins/gitiles/' . repo . '/+/' . commit . '/' . a:opts.path 
 
