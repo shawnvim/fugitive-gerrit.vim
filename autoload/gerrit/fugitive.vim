@@ -3,34 +3,23 @@
 
 " see: fugitive_browse_handlers
 function! gerrit#fugitive#url(opts, ...) abort
-  if a:0 || type(a:opts) != type({})
-    return ''
-  endif
 
-  let domains = get(g:, 'fugitive_gerrit_domains', [])
-  let domains = map(domains, { _, domain ->  split(domain, '://')[-1] })
+    if a:0 || type(a:opts) != type({})
+        return ''
+    endif
 
-  let domain_pattern = join(domains, '\|')
 
-  if a:opts.commit =~# '^\d\=$'
-    let commit = a:opts.repo.rev_parse('HEAD')
-  else
-    let commit = a:opts.commit
-  endif
+    if a:opts.type =~# 'commit' || a:opts.type =~# 'ref'
+        let commit = a:opts.commit 
+    elseif a:opts.type =~# 'tree'
+        let commit = expand("<cword>") 
+    else
+        let commit = gerrit#change_id()
+    endif
 
-  try
-    let [domain, repo] = matchlist(a:opts.remote,'^.*\(' . escape(domain_pattern, '.') . '\)[^/]*/\zs\(.*\)$')[1:2]
-  catch /.*/
-    " None of the domains could be found
-    return ''
-  endtry
+    let url  = 'https://' . gerrit#domain() . '/#/q/' . commit
 
-  let url  = 'https://' . domain . '/plugins/gitiles/' . repo . '/+/' . commit . '/' . a:opts.path 
-
-  if a:opts.line1 > 0
-    let url .= '#' . a:opts.line1
-  endif
-
-  return url
+    return url
 endfunction
+
 
