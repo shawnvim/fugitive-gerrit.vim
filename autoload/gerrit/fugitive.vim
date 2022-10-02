@@ -9,8 +9,10 @@ function! gerrit#fugitive#url(opts, ...) abort
     endif
 
 
-    if a:opts.type =~# 'commit' || a:opts.type =~# 'ref'
-        let commit = a:opts.commit 
+    if a:opts.type =~# 'commit' a:opts.type =~# 'ref'
+        let commit = a:opts.commit
+    elseif  a:opts.type =~# 'ref'
+        let commit = a:opts.commit[:7]
     elseif a:opts.type =~# 'tree'
         let commit = expand("<cword>") 
     else
