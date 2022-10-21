@@ -150,8 +150,8 @@ function! gerrit#comments(...) abort
 endfunction
 
 function s:comment2cexpr(filename, comment)
-    let gitdir = FugitiveGitDir()[:-5]
-  let cexpr = 'GERRITCOMMENT:'
+    let gitdir = fnamemodify(FugitiveGitDir(),':h')
+    let cexpr = 'GERRITCOMMENT:'
         \ . '|' . gitdir . '/' . a:filename 
         \ . '|' . 'Patchset ' . a:comment['patch_set'] . ':' .  a:filename "substitute(a:filename, '\(.\)[^/]\+/', '\1/', 'g')
 "         \ . '|'  . 'fugitive://'. FugitiveGitDir() . '//' . a:comment['id'] . '/'. a:filename 
