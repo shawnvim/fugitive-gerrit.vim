@@ -244,7 +244,7 @@ endfunction
 
 function! s:curl_arguments(path, ...) abort
   let options = a:0 ? a:1 : {}
-  let args = ['curl', '-q', '--silent']
+  let args = ['curl', '-q', '--silent', '--location']
   call extend(args, ['-H', 'Accept: application/json'])
   call extend(args, ['-H', 'Content-Type: application/json'])
   call extend(args, ['-A', 'gerrit.vim'])
